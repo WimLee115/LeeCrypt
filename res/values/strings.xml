@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">LeeCrypt by WimLee115</string>
+    <string name="encrypt">Encrypt</string>
+    <string name="decrypt">Decrypt</string>
+    <string name="hash">Hash</string>
+    <string name="input_text">Enter text or file path</string>
+    <string name="key">Enter key</string>
+    <string name="output">Output</string>
+    <string name="hash_type">Select Hash Type</string>
+    <string name="qr_scan">Scan QR</string>
+    <string name="qr_export">Export as QR</string>
+    <string name="nfc_share">Share via NFC</string>
+    <string name="save_key">Save Key</string>
+    <string name="terminal_mode">Terminal Command</string>
+    <string name="stego">Hide in Image</string>
+    <string name="theme">Switch Theme</string>
+    <string name="tab_text">Text</string>
+    <string name="tab_file">File</string>
+    <string name="tab_terminal">Terminal</string>
+</resources>

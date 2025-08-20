@@ -1,0 +1,13 @@
+<resources>
+    <string-array name="hash_types">
+        <item>MD5</item>
+        <item>SHA-1</item>
+        <item>SHA-256</item>
+        <item>SHA-512</item>
+        <item>HMAC-SHA512</item>
+        <item>BCrypt</item>
+        <item>SCrypt</item>
+        <item>Argon2</item>
+        <item>BLAKE3</item>
+    </string-array>
+</resources>
