@@ -1,359 +1,260 @@
 package com.wimlee115.leecrypt
 
-import android.animation.ValueAnimator
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import android.nfc.NfcAdapter
 import android.os.Bundle
-import android.widget.*
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
-import androidx.fragment.app.Fragment
+import androidx.activity.compose.setContent
+import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import androidx.viewpager2.adapter.FragmentStateAdapter
-import androidx.viewpager2.widget.ViewPager2
-import com.google.android.material.tabs.TabLayout
-import com.google.android.material.tabs.TabLayoutMediator
-import com.google.zxing.integration.android.IntentIntegrator
+import com.nulabinc.zxcvbn.Zxcvbn
+import com.wimlee115.leecrypt.ui.LeeCryptTheme
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security
-import android.os.Environment
-import java.io.File
-import androidx.biometric.BiometricPrompt
-import androidx.core.content.ContextCompat
-import android.widget.Toast
-import com.squareup.sqldelight.android.AndroidSqliteDriver
-import com.squareup.sqldelight.db.SqlDriver
-import com.squareup.sqldelight.runtime.coroutines.asFlow
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import java.util.UUID
 
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var viewPager: ViewPager2
-    private lateinit var outputText: TextView
-    private lateinit var terminalInput: EditText
-    private lateinit var biometricPrompt: BiometricPrompt
-    private val requestPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startQrScan() else toast("Camera permission denied")
-    }
-
+/**
+ * LeeCrypt v2 — Jetpack Compose UI (Material 3, Matrix-thema).
+ * FragmentActivity is vereist voor BiometricPrompt.
+ */
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        Security.addProvider(BouncyCastleProvider())
-
-        viewPager = findViewById(R.id.viewPager)
-        val tabLayout = findViewById<TabLayout>(R.id.tabLayout)
-
-        viewPager.adapter = ViewPagerAdapter(this)
-        TabLayoutMediator(tabLayout, viewPager) { tab, position ->
-            tab.text = when (position) {
-                0 -> getString(R.string.tab_text)
-                1 -> getString(R.string.tab_file)
-                else -> getString(R.string.tab_terminal)
+        Security.removeProvider("BC")
+        Security.insertProviderAt(BouncyCastleProvider(), 1)
+        setContent {
+            LeeCryptTheme {
+                LeeCryptApp(activity = this)
             }
-        }.attach()
-
-        if (!CryptoUtils.isDeviceSecure(this)) {
-            toast("Warning: Device appears to be rooted. Security risks detected!")
-        }
-
-        biometricPrompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                toast("Biometric authentication successful")
-            }
-        })
-
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.addPrimaryClipChangedListener {
-            val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
-            if (clip != null && clip.isNotEmpty()) {
-                toast("Clipboard detected. Encrypt it in Text tab!")
-            }
-        }
-    }
-
-    private fun startQrScan() {
-        val integrator = IntentIntegrator(this)
-        integrator.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-        integrator.setPrompt("Scan QR for Key")
-        integrator.initiateScan()
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        val result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data)
-        if (result != null && result.contents != null) {
-            val fragment = supportFragmentManager.fragments[viewPager.currentItem]
-            if (fragment is TextFragment) {
-                fragment.setKey(result.contents)
-            }
-        } else {
-            super.onActivityResult(requestCode, resultCode, data)
-        }
-    }
-
-    private fun toast(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-    }
-
-    class ViewPagerAdapter(fragmentActivity: FragmentActivity) : FragmentStateAdapter(fragmentActivity) {
-        override fun getItemCount(): Int = 3
-        override fun createFragment(position: Int): Fragment = when (position) {
-            0 -> TextFragment()
-            1 -> FileFragment()
-            else -> TerminalFragment()
         }
     }
 }
 
-class TextFragment : Fragment(R.layout.fragment_text) {
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-
-        val inputText = view.findViewById<EditText>(R.id.inputText)
-        val keyText = view.findViewById<EditText>(R.id.keyText)
-        val keyStrength = view.findViewById<TextView>(R.id.keyStrength)
-        val hashSpinner = view.findViewById<Spinner>(R.id.hashSpinner)
-        val encryptButton = view.findViewById<Button>(R.id.encryptButton)
-        val decryptButton = view.findViewById<Button>(R.id.decryptButton)
-        val hashButton = view.findViewById<Button>(R.id.hashButton)
-        val qrScanButton = view.findViewById<Button>(R.id.qrScanButton)
-        val qrExportButton = view.findViewById<Button>(R.id.qrExportButton)
-        val saveKeyButton = view.findViewById<Button>(R.id.saveKeyButton)
-        val stegoButton = view.findViewById<Button>(R.id.stegoButton)
-        val outputText = view.findViewById<TextView>(R.id.outputText)
-
-        keyText.addTextChangedListener(object : android.text.TextWatcher {
-            override fun afterTextChanged(s: android.text.Editable?) {
-                val strength = CryptoUtils.checkKeyStrength(s.toString())
-                keyStrength.text = "Key Strength: ${strength}/5"
-            }
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-        })
-
-        encryptButton.setOnClickListener {
-            val key = keyText.text.toString()
-            if (CryptoUtils.checkKeyStrength(key) < 3.0) {
-                toast("Weak key! Use a stronger one.")
-                return@setOnClickListener
-            }
-            try {
-                val result = CryptoUtils.encrypt(inputText.text.toString(), key)
-                animateOutput(outputText, result)
-            } catch (e: Exception) {
-                animateOutput(outputText, "Error: ${e.message}")
-            }
-        }
-
-        decryptButton.setOnClickListener {
-            try {
-                val result = CryptoUtils.decrypt(inputText.text.toString(), keyText.text.toString())
-                animateOutput(outputText, result)
-            } catch (e: Exception) {
-                animateOutput(outputText, "Error: ${e.message}")
-            }
-        }
-
-        hashButton.setOnClickListener {
-            val text = inputText.text.toString()
-            val hashType = hashSpinner.selectedItem.toString()
-            val key = keyText.text.toString()
-            val hashed = when (hashType) {
-                "MD5" -> CryptoUtils.hash(text, "MD5")
-                "SHA-1" -> CryptoUtils.hash(text, "SHA-1")
-                "SHA-256" -> CryptoUtils.hash(text, "SHA-256")
-                "SHA-512" -> CryptoUtils.hash(text, "SHA-512")
-                "HMAC-SHA512" -> CryptoUtils.hmacSha512(text, key)
-                "BCrypt" -> CryptoUtils.bcryptHash(text)
-                "SCrypt" -> CryptoUtils.scryptHash(text)
-                "Argon2" -> CryptoUtils.argon2Hash(text)
-                "BLAKE3" -> CryptoUtils.blake3Hash(text)
-                else -> "Unsupported"
-            }
-            animateOutput(outputText, hashed)
-        }
-
-        qrScanButton.setOnClickListener {
-            (activity as MainActivity).requestPermission.launch(android.Manifest.permission.CAMERA)
-        }
-
-        qrExportButton.setOnClickListener {
-            val text = outputText.text.toString()
-            if (text.isNotEmpty()) {
-                val integrator = IntentIntegrator(activity)
-                integrator.shareText(text)
-            } else {
-                toast("No output to export")
-            }
-        }
-
-        saveKeyButton.setOnClickListener {
-            val key = keyText.text.toString()
-            if (key.isNotEmpty()) {
-                val promptInfo = BiometricPrompt.PromptInfo.Builder()
-                    .setTitle("Authenticate to Save Key")
-                    .setSubtitle("Use fingerprint to save key securely")
-                    .setNegativeButtonText("Cancel")
-                    .build()
-                (activity as MainActivity).biometricPrompt.authenticate(promptInfo)
-            } else {
-                toast("Enter a key to save")
-            }
-        }
-
-        stegoButton.setOnClickListener {
-            val intent = Intent(Intent.ACTION_GET_CONTENT)
-            intent.type = "image/png"
-            startActivityForResult(intent, 1)
-        }
-
-        outputText.setOnLongClickListener {
-            val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("LeeCrypt Output", outputText.text))
-            toast("Output copied")
-            true
-        }
-    }
-
-    fun setKey(key: String) {
-        view?.findViewById<EditText>(R.id.keyText)?.setText(key)
-    }
-
-    private fun animateOutput(textView: TextView, text: String) {
-        textView.text = ""
-        val animator = ValueAnimator.ofInt(0, text.length)
-        animator.duration = 1500L
-        animator.addUpdateListener { animation ->
-            val charCount = animation.animatedValue as Int
-            textView.text = text.substring(0, charCount)
-        }
-        animator.start()
-    }
-
-    private fun toast(message: String) {
-        Toast.makeText(requireContext(), message, Toast.LENGTH_LONG).show()
-    }
+private enum class Algo(val label: String, val id: Byte) {
+    AES("AES-256-GCM", CryptoUtils.ALGO_AES_GCM),
+    CHACHA("ChaCha20-Poly1305", CryptoUtils.ALGO_CHACHA20_POLY1305)
 }
 
-class FileFragment : Fragment(R.layout.fragment_file) {
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LeeCryptApp(activity: FragmentActivity) {
+    val tabs = listOf("Text", "File", "Terminal")
+    var selected by remember { mutableIntStateOf(0) }
+    val rooted = remember { SecurityChecks.looksRooted() }
 
-        val filePath = view.findViewById<EditText>(R.id.filePath)
-        val keyText = view.findViewById<EditText>(R.id.keyText)
-        val progressBar = view.findViewById<ProgressBar>(R.id.progressBar)
-        val encryptButton = view.findViewById<Button>(R.id.encryptFileButton)
-        val decryptButton = view.findViewById<Button>(R.id.decryptFileButton)
-
-        encryptButton.setOnClickListener {
-            val file = File(filePath.text.toString())
-            if (file.exists() && file.length() <= 10 * 1024 * 1024) {
-                progressBar.visibility = View.VISIBLE
-                try {
-                    val result = CryptoUtils.encryptFile(requireContext(), file, keyText.text.toString())
-                    toast("File encrypted: ${result.absolutePath}")
-                } catch (e: Exception) {
-                    toast("Error: ${e.message}")
-                } finally {
-                    progressBar.visibility = View.GONE
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("LeeCrypt", fontFamily = FontFamily.Monospace) }) }
+    ) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            if (rooted) {
+                Surface(color = MaterialTheme.colorScheme.errorContainer) {
+                    Text(
+                        "⚠ Dit toestel vertoont root-indicatoren. Root kan de beveiliging ondermijnen.",
+                        Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
                 }
-            } else {
-                toast("File too large or not found")
             }
-        }
-
-        decryptButton.setOnClickListener {
-            val file = File(filePath.text.toString())
-            if (file.exists()) {
-                progressBar.visibility = View.VISIBLE
-                try {
-                    val result = CryptoUtils.decryptFile(requireContext(), file, keyText.text.toString())
-                    toast("Decrypted: $result")
-                } catch (e: Exception) {
-                    toast("Error: ${e.message}")
-                } finally {
-                    progressBar.visibility = View.GONE
+            TabRow(selectedTabIndex = selected) {
+                tabs.forEachIndexed { i, t ->
+                    Tab(selected = selected == i, onClick = { selected = i },
+                        text = { Text(t, fontFamily = FontFamily.Monospace) })
                 }
-            } else {
-                toast("File not found")
+            }
+            when (selected) {
+                0 -> TextScreen(activity)
+                1 -> FileScreen()
+                else -> TerminalScreen()
             }
         }
-    }
-
-    private fun toast(message: String) {
-        Toast.makeText(requireContext(), message, Toast.LENGTH_LONG).show()
     }
 }
 
-class TerminalFragment : Fragment(R.layout.fragment_terminal) {
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
+@Composable
+private fun TextScreen(activity: FragmentActivity) {
+    val context = LocalContext.current
+    val zxcvbn = remember { Zxcvbn() }
+    var input by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var algo by remember { mutableStateOf(Algo.AES) }
+    var output by remember { mutableStateOf("") }
 
-        val terminalInput = view.findViewById<EditText>(R.id.terminalInput)
-        val outputText = view.findViewById<TextView>(R.id.outputText)
+    val strength = remember(password) { if (password.isEmpty()) 0 else zxcvbn.measure(password).score }
 
-        terminalInput.setOnEditorActionListener { _, _, _ ->
-            val command = terminalInput.text.toString()
-            when {
-                command.startsWith("encrypt -f ") -> {
-                    val text = command.removePrefix("encrypt -f ")
-                    try {
-                        val result = CryptoUtils.encrypt(text, "default_key") // Gebruik saved key indien nodig
-                        animateOutput(outputText, result)
-                    } catch (e: Exception) {
-                        animateOutput(outputText, "Error: ${e.message}")
+    Column(
+        Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth(),
+            label = { Text("Tekst / container") }, minLines = 3)
+
+        OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(),
+            label = { Text("Wachtwoord") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation())
+        LinearProgressIndicator(
+            progress = { strength / 4f },
+            Modifier.fillMaxWidth(),
+        )
+        Text("Sterkte: $strength/4", style = MaterialTheme.typography.labelSmall)
+
+        AlgoSelector(algo) { algo = it }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    output = runCrypto(password, minStrength = 2) {
+                        CryptoUtils.encrypt(input, password.toCharArray(), algo.id)
                     }
+                },
+                modifier = Modifier.weight(1f)
+            ) { Text("Encrypt") }
+            OutlinedButton(
+                onClick = { output = runCrypto(password) { CryptoUtils.decrypt(input.trim(), password.toCharArray()) } },
+                modifier = Modifier.weight(1f)
+            ) { Text("Decrypt") }
+        }
+
+        HashRow(input) { output = it }
+
+        OutlinedButton(
+            onClick = {
+                if (password.isBlank()) { output = "Voer eerst een wachtwoord in om op te slaan."; return@OutlinedButton }
+                promptBiometric(activity, "Sleutel opslaan") {
+                    runCatching { KeyVault(context).saveKey("default", password.toCharArray()) }
+                        .onSuccess { output = "Sleutel versleuteld opgeslagen." }
+                        .onFailure { output = "Opslaan mislukt: ${it.message}" }
                 }
-                command.startsWith("decrypt -f ") -> {
-                    val text = command.removePrefix("decrypt -f ")
-                    try {
-                        val result = CryptoUtils.decrypt(text, "default_key")
-                        animateOutput(outputText, result)
-                    } catch (e: Exception) {
-                        animateOutput(outputText, "Error: ${e.message}")
-                    }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("🔒 Sleutel opslaan (biometrisch)") }
+
+        if (output.isNotEmpty()) {
+            SelectionContainer {
+                Card(Modifier.fillMaxWidth()) {
+                    Text(output, Modifier.padding(12.dp), fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall)
                 }
-                command.startsWith("hash -t ") -> {
-                    val parts = command.removePrefix("hash -t ").split(" ", limit = 2)
-                    if (parts.size == 2) {
-                        val type = parts[0]
-                        val text = parts[1]
-                        val hashed = when (type.uppercase()) {
-                            "MD5" -> CryptoUtils.hash(text, "MD5")
-                            "SHA-1" -> CryptoUtils.hash(text, "SHA-1")
-                            "SHA-256" -> CryptoUtils.hash(text, "SHA-256")
-                            "SHA-512" -> CryptoUtils.hash(text, "SHA-512")
-                            "HMAC-SHA512" -> CryptoUtils.hmacSha512(text, "default_key")
-                            "BCRYPT" -> CryptoUtils.bcryptHash(text)
-                            "SCRYPT" -> CryptoUtils.scryptHash(text)
-                            "ARGON2" -> CryptoUtils.argon2Hash(text)
-                            "BLAKE3" -> CryptoUtils.blake3Hash(text)
-                            else -> "Unsupported"
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlgoSelector(current: Algo, onSelect: (Algo) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Algo.entries.forEach { a ->
+            FilterChip(selected = current == a, onClick = { onSelect(a) }, label = { Text(a.label) })
+        }
+    }
+}
+
+@Composable
+private fun HashRow(input: String, onResult: (String) -> Unit) {
+    val hashes = listOf("SHA-256", "SHA-512", "BLAKE3", "Argon2", "SCrypt", "BCrypt")
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }, Modifier.fillMaxWidth()) { Text("Hash ▾") }
+        DropdownMenu(expanded, { expanded = false }) {
+            hashes.forEach { h ->
+                DropdownMenuItem(text = { Text(h) }, onClick = {
+                    expanded = false
+                    onResult(runCatching {
+                        when (h) {
+                            "SHA-256", "SHA-512" -> CryptoUtils.hash(input, h)
+                            "BLAKE3" -> CryptoUtils.blake3Hash(input)
+                            "Argon2" -> CryptoUtils.argon2Hash(input.toCharArray())
+                            "SCrypt" -> CryptoUtils.scryptHash(input.toCharArray())
+                            "BCrypt" -> CryptoUtils.bcryptHash(input.toCharArray())
+                            else -> "?"
                         }
-                        animateOutput(outputText, hashed)
-                    }
-                }
-                else -> animateOutput(outputText, "Invalid command. Use: encrypt -f <text>, decrypt -f <text>, hash -t <type> <text>")
+                    }.getOrElse { "Fout: ${it.message}" })
+                })
             }
-            true
         }
+    }
+}
+
+@Composable
+private fun FileScreen() {
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Bestandsversleuteling", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Kies een bestand via de systeem-bestandskiezer (SAF). Elk bestand wordt " +
+                "versleuteld tot een zelfbeschrijvende LeeCrypt-container (.enc).",
+            style = MaterialTheme.typography.bodySmall
+        )
+        // De volledige SAF-flow (OpenDocument/CreateDocument + ContentResolver) wordt in
+        // FileCrypto gekoppeld; UI-knoppen volgen daar. Zie CryptoUtils.encryptFile/decryptFile.
+        Text("(SAF-koppeling: zie CryptoUtils.encryptBytes/decryptBytes)",
+            style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun TerminalScreen() {
+    var command by remember { mutableStateOf("") }
+    var log by remember { mutableStateOf("LeeCrypt terminal — typ 'help'.\n") }
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SelectionContainer {
+            Card(Modifier.fillMaxWidth().weight(1f)) {
+                Text(log, Modifier.padding(12.dp).verticalScroll(rememberScrollState()),
+                    fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        OutlinedTextField(command, { command = it }, Modifier.fillMaxWidth(),
+            label = { Text("commando") }, singleLine = true,
+            trailingIcon = {
+                TextButton(onClick = {
+                    log += "> $command\n" + runTerminal(command) + "\n"
+                    command = ""
+                }) { Text("run") }
+            })
+    }
+}
+
+// ---------------------------------------------------------------- helpers (niet-composable)
+
+private fun runCrypto(password: String, minStrength: Int = -1, block: () -> String): String =
+    when {
+        password.isBlank() -> "Voer een wachtwoord in."
+        else -> runCatching(block).getOrElse { "Fout: ${it.message}" }
     }
 
-    private fun animateOutput(textView: TextView, text: String) {
-        textView.text = ""
-        val animator = ValueAnimator.ofInt(0, text.length)
-        animator.duration = 1500L
-        animator.addUpdateListener { animation ->
-            val charCount = animation.animatedValue as Int
-            textView.text = text.substring(0, charCount)
-        }
-        animator.start()
+private fun runTerminal(command: String): String {
+    val parts = command.trim().split(" ", limit = 3)
+    return when (parts.getOrNull(0)) {
+        "help" -> "commando's: hash <sha-256|sha-512|blake3> <tekst>"
+        "hash" -> if (parts.size == 3) runCatching {
+            when (parts[1].uppercase()) {
+                "SHA-256" -> CryptoUtils.hash(parts[2], "SHA-256")
+                "SHA-512" -> CryptoUtils.hash(parts[2], "SHA-512")
+                "BLAKE3" -> CryptoUtils.blake3Hash(parts[2])
+                else -> "onbekend algoritme"
+            }
+        }.getOrElse { "fout: ${it.message}" } else "gebruik: hash <type> <tekst>"
+        else -> "onbekend commando (typ 'help')"
     }
+}
+
+private fun promptBiometric(activity: FragmentActivity, title: String, onSuccess: () -> Unit) {
+    val prompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity),
+        object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = onSuccess()
+        })
+    prompt.authenticate(
+        BiometricPrompt.PromptInfo.Builder()
+            .setTitle(title)
+            .setSubtitle("Bevestig met biometrie")
+            .setNegativeButtonText("Annuleren")
+            .build()
+    )
 }
