@@ -1,8 +1,15 @@
 package com.wimlee115.leecrypt
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -11,12 +18,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import com.google.zxing.BarcodeFormat
+import com.journeyapps.barcodescanner.BarcodeEncoder
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import com.nulabinc.zxcvbn.Zxcvbn
 import com.wimlee115.leecrypt.ui.LeeCryptTheme
 import org.bouncycastle.jce.provider.BouncyCastleProvider
@@ -87,6 +99,11 @@ private fun TextScreen(activity: FragmentActivity) {
     var password by remember { mutableStateOf("") }
     var algo by remember { mutableStateOf(Algo.AES) }
     var output by remember { mutableStateOf("") }
+    var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        result.contents?.let { input = it; qrBitmap = null }
+    }
 
     val strength = remember(password) { if (password.isEmpty()) 0 else zxcvbn.measure(password).score }
 
@@ -137,6 +154,40 @@ private fun TextScreen(activity: FragmentActivity) {
             modifier = Modifier.fillMaxWidth()
         ) { Text("🔒 Sleutel opslaan (biometrisch)") }
 
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = {
+                    scanLauncher.launch(
+                        ScanOptions()
+                            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                            .setPrompt("Scan een QR-code")
+                            .setBeepEnabled(false)
+                    )
+                },
+                modifier = Modifier.weight(1f)
+            ) { Text("📷 Scan QR") }
+            OutlinedButton(
+                onClick = {
+                    qrBitmap = null
+                    when {
+                        output.isBlank() -> output = "Niets om als QR te tonen."
+                        output.length > 2000 -> output = "Te groot voor QR (${output.length} tekens, max ~2000)."
+                        else -> qrBitmap = generateQr(output)
+                    }
+                },
+                enabled = output.isNotEmpty(),
+                modifier = Modifier.weight(1f)
+            ) { Text("▦ Toon als QR") }
+        }
+
+        qrBitmap?.let { bmp ->
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = "QR-code van het resultaat",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+            )
+        }
+
         if (output.isNotEmpty()) {
             SelectionContainer {
                 Card(Modifier.fillMaxWidth()) {
@@ -185,17 +236,78 @@ private fun HashRow(input: String, onResult: (String) -> Unit) {
 
 @Composable
 private fun FileScreen() {
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val context = LocalContext.current
+    var inputUri by remember { mutableStateOf<Uri?>(null) }
+    var inputName by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var algo by remember { mutableStateOf(Algo.AES) }
+    var status by remember { mutableStateOf("") }
+    var encryptMode by remember { mutableStateOf(true) }
+
+    val pickInput = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            inputUri = uri
+            inputName = queryFileName(context, uri)
+            status = ""
+        }
+    }
+    val saveOutput = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { outUri ->
+        val src = inputUri
+        if (outUri != null && src != null) {
+            status = runCatching {
+                val inBytes = context.contentResolver.openInputStream(src)!!.use { it.readBytes() }
+                val outBytes = if (encryptMode)
+                    CryptoUtils.encryptBytes(inBytes, password.toCharArray(), algo.id)
+                else
+                    CryptoUtils.decryptBytes(inBytes, password.toCharArray())
+                context.contentResolver.openOutputStream(outUri)!!.use { it.write(outBytes) }
+                "✅ ${outBytes.size} bytes weggeschreven."
+            }.getOrElse { "Fout: ${it.message}" }
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         Text("Bestandsversleuteling", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Kies een bestand via de systeem-bestandskiezer (SAF). Elk bestand wordt " +
-                "versleuteld tot een zelfbeschrijvende LeeCrypt-container (.enc).",
+            "Kies een bestand via de systeem-bestandskiezer (SAF). Versleutelen levert een " +
+                "zelfbeschrijvende LeeCrypt-container op; ontsleutelen herstelt het origineel.",
             style = MaterialTheme.typography.bodySmall
         )
-        // De volledige SAF-flow (OpenDocument/CreateDocument + ContentResolver) wordt in
-        // FileCrypto gekoppeld; UI-knoppen volgen daar. Zie CryptoUtils.encryptFile/decryptFile.
-        Text("(SAF-koppeling: zie CryptoUtils.encryptBytes/decryptBytes)",
-            style = MaterialTheme.typography.labelSmall)
+
+        OutlinedButton(onClick = { pickInput.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (inputName.isEmpty()) "📂 Kies bestand" else "📂 $inputName")
+        }
+
+        OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(),
+            label = { Text("Wachtwoord") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation())
+
+        AlgoSelector(algo) { algo = it }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { encryptMode = true; saveOutput.launch("$inputName.enc") },
+                enabled = inputUri != null && password.isNotBlank(),
+                modifier = Modifier.weight(1f)
+            ) { Text("Versleutel") }
+            OutlinedButton(
+                onClick = { encryptMode = false; saveOutput.launch(inputName.removeSuffix(".enc") + ".dec") },
+                enabled = inputUri != null && password.isNotBlank(),
+                modifier = Modifier.weight(1f)
+            ) { Text("Ontsleutel") }
+        }
+
+        if (status.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Text(status, Modifier.padding(12.dp), fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 }
 
@@ -258,3 +370,16 @@ private fun promptBiometric(activity: FragmentActivity, title: String, onSuccess
             .build()
     )
 }
+
+private fun queryFileName(context: Context, uri: Uri): String {
+    var name = "bestand"
+    context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+        val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (idx >= 0 && c.moveToFirst()) name = c.getString(idx)
+    }
+    return name
+}
+
+private fun generateQr(text: String): Bitmap? = runCatching {
+    BarcodeEncoder().encodeBitmap(text, BarcodeFormat.QR_CODE, 640, 640)
+}.getOrNull()
