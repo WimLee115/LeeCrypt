@@ -1,0 +1,9 @@
+<resources>
+    <!-- Window-basis; de echte theming gebeurt in Compose (ui/Theme.kt). NoActionBar
+         omdat Compose een eigen TopAppBar tekent. -->
+    <style name="Theme.LeeCrypt" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">#0D1117</item>
+        <item name="android:navigationBarColor">#0D1117</item>
+        <item name="android:windowBackground">#0D1117</item>
+    </style>
+</resources>
