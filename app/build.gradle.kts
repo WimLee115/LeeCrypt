@@ -45,6 +45,12 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true // Robolectric
+        }
+    }
 }
 
 kotlin {
@@ -84,4 +90,6 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.bouncycastle)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
 }
