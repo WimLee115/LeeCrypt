@@ -848,7 +848,7 @@ git clone https://github.com/WimLee115/LeeCrypt.git
 │   "If you have nothing to hide, you have            │
 │    nothing to protect — and that's the problem."    │
 │                                                     │
-│   Contact: ai-idle@outlook.com                      │
+│   Contact: github.com/WimLee115                      │
 │   GitHub:  github.com/WimLee115                     │
 │                                                     │
 └─────────────────────────────────────────────────────┘
