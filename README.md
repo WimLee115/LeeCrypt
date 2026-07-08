@@ -67,9 +67,11 @@ Zet de APK op je toestel (Android 8.0+), sta "installeren van onbekende apps" to
 
 Deze v2 is een volledige herbouw. De crypto-kern is af en geverifieerd; een paar onderdelen zijn bewust nog open:
 
+**Recent afgerond**
+- [x] SAF-bestandsflow: kiezen → versleutelen/ontsleutelen → opslaan via de systeemkiezer.
+- [x] QR-scan (sleutel/container inlezen) + QR-export van het resultaat.
+
 **Bekende gaten (kort)**
-- [ ] SAF-bestandsflow in de UI afmaken (de crypto eronder — `encryptFile`/`decryptFile` — is klaar en getest).
-- [ ] QR-scan/-export terug in de Compose-UI (via `ScanContract`).
 - [ ] Instrumented UI-tests + test van de biometrische flow op een echt toestel.
 
 **Middellange termijn**
